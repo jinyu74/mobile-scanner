@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:cunning_document_scanner/cunning_document_scanner.dart';
 import 'package:flutter/material.dart';
 
+import 'save_service.dart';
+
 /// 스캔을 실행하고 페이지 이미지 경로 목록을 돌려준다. 취소하면 null.
 typedef DocumentScanFn = Future<List<String>?> Function();
 
@@ -17,9 +19,14 @@ void main() {
 }
 
 class ScannerApp extends StatelessWidget {
-  const ScannerApp({super.key, this.scan = scanWithOsScanner});
+  const ScannerApp({
+    super.key,
+    this.scan = scanWithOsScanner,
+    this.saver = const DeviceSaveService(),
+  });
 
   final DocumentScanFn scan;
+  final SaveService saver;
 
   @override
   Widget build(BuildContext context) {
@@ -29,15 +36,16 @@ class ScannerApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
       ),
-      home: HomeScreen(scan: scan),
+      home: HomeScreen(scan: scan, saver: saver),
     );
   }
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.scan});
+  const HomeScreen({super.key, required this.scan, required this.saver});
 
   final DocumentScanFn scan;
+  final SaveService saver;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -46,6 +54,53 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final List<String> _pages = [];
   bool _scanning = false;
+  bool _saving = false;
+
+  void _toast(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _openSaveSheet() async {
+    final action = await showModalBottomSheet<SaveAction>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => const SaveSheet(),
+    );
+    if (action == null || !mounted) return;
+    await _runSave(action);
+  }
+
+  Future<void> _runSave(SaveAction action) async {
+    final pages = List<String>.of(_pages);
+    setState(() => _saving = true);
+    try {
+      switch (action) {
+        case SaveAction.galleryJpg:
+        case SaveAction.galleryPng:
+          final format = action == SaveAction.galleryPng
+              ? ImageFormat.png
+              : ImageFormat.jpg;
+          final n = await widget.saver.saveToGallery(pages, format);
+          if (mounted) {
+            _toast('사진첩에 $n장을 ${format.name.toUpperCase()}로 저장했습니다.');
+          }
+        case SaveAction.pdf:
+          final saved = await widget.saver.savePdf(
+            pages,
+            defaultPdfName(DateTime.now()),
+          );
+          if (mounted && saved) _toast('PDF(${pages.length}쪽)를 저장했습니다.');
+        case SaveAction.share:
+          await widget.saver.share(pages);
+      }
+    } catch (e) {
+      if (mounted) _toast('저장에 실패했습니다: $e');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
 
   Future<void> _startScan() async {
     setState(() => _scanning = true);
@@ -89,6 +144,31 @@ class _HomeScreenState extends State<HomeScreen> {
               itemCount: _pages.length,
               itemBuilder: (context, i) => _PageTile(index: i, path: _pages[i]),
             ),
+      bottomNavigationBar: _pages.isEmpty
+          ? null
+          : SafeArea(
+              minimum: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: _saving ? null : _openSaveSheet,
+                      icon: _saving
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.save_alt),
+                      label: Text('저장 / 공유 (${_pages.length}쪽)'),
+                    ),
+                  ),
+                  // FAB 자리를 비워 둔다.
+                  const SizedBox(width: 140),
+                ],
+              ),
+            ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endDocked,
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _scanning ? null : _startScan,
         icon: _scanning
@@ -99,6 +179,47 @@ class _HomeScreenState extends State<HomeScreen> {
               )
             : const Icon(Icons.document_scanner_outlined),
         label: const Text('스캔하기'),
+      ),
+    );
+  }
+}
+
+enum SaveAction { galleryJpg, galleryPng, pdf, share }
+
+class SaveSheet extends StatelessWidget {
+  const SaveSheet({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    void pick(SaveAction a) => Navigator.of(context).pop(a);
+    return SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.photo_library_outlined),
+            title: const Text('사진첩에 저장 (JPG)'),
+            subtitle: const Text('용량이 작아 일반적인 용도에 알맞습니다'),
+            onTap: () => pick(SaveAction.galleryJpg),
+          ),
+          ListTile(
+            leading: const Icon(Icons.image_outlined),
+            title: const Text('사진첩에 저장 (PNG)'),
+            subtitle: const Text('화질 손실 없이 저장합니다'),
+            onTap: () => pick(SaveAction.galleryPng),
+          ),
+          ListTile(
+            leading: const Icon(Icons.picture_as_pdf_outlined),
+            title: const Text('PDF로 저장'),
+            subtitle: const Text('모든 페이지를 A4 PDF 한 파일로 저장합니다'),
+            onTap: () => pick(SaveAction.pdf),
+          ),
+          ListTile(
+            leading: const Icon(Icons.ios_share),
+            title: const Text('공유'),
+            onTap: () => pick(SaveAction.share),
+          ),
+        ],
       ),
     );
   }
