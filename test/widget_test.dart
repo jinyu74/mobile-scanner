@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:mobile_scanner/main.dart';
+import 'package:mobile_scanner/ocr_service.dart';
 import 'package:mobile_scanner/save_service.dart';
+import 'package:mobile_scanner/text_result_screen.dart';
 
 class FakeSaver implements SaveService {
   final calls = <String>[];
@@ -23,11 +26,68 @@ class FakeSaver implements SaveService {
   }
 
   @override
-  Future<void> share(List<String> paths) async =>
-      calls.add('share:${paths.length}');
+  Future<bool> saveText(String text, String fileName) async {
+    calls.add('saveText:$text');
+    return true;
+  }
+
+  final origins = <Rect?>[];
+
+  @override
+  Future<void> sharePdf(
+    List<String> paths,
+    String fileName,
+    Rect? origin,
+  ) async {
+    origins.add(origin);
+    calls.add('sharePdf:${paths.length}');
+  }
+
+  @override
+  Future<void> shareImages(List<String> paths, Rect? origin) async {
+    origins.add(origin);
+    calls.add('shareImages:${paths.length}');
+  }
+
+  @override
+  Future<void> shareText(String text, Rect? origin) async {
+    origins.add(origin);
+    calls.add('shareText:$text');
+  }
+}
+
+/// 경로마다 정해 둔 글을 돌려주는 가짜 OCR.
+class FakeOcr implements OcrService {
+  FakeOcr(this.texts);
+  final Map<String, String> texts;
+
+  @override
+  Future<String> recognize(String imagePath) async => texts[imagePath] ?? '';
+}
+
+Future<FakeSaver> _scanWithOcr(WidgetTester tester, FakeOcr ocr) async {
+  tester.view
+    ..devicePixelRatio = 1
+    ..physicalSize = const Size(800, 1600);
+  addTearDown(tester.view.reset);
+  final saver = FakeSaver();
+  await tester.pumpWidget(
+    ScannerApp(
+      scan: () async => ['/tmp/a.jpg', '/tmp/b.jpg'],
+      saver: saver,
+      ocr: ocr,
+    ),
+  );
+  await tester.tap(find.text('스캔하기'));
+  await tester.pumpAndSettle();
+  return saver;
 }
 
 Future<FakeSaver> _scanTwoPages(WidgetTester tester) async {
+  tester.view
+    ..devicePixelRatio = 1
+    ..physicalSize = const Size(800, 1600);
+  addTearDown(tester.view.reset);
   final saver = FakeSaver();
   await tester.pumpWidget(
     ScannerApp(scan: () async => ['/tmp/a.jpg', '/tmp/b.jpg'], saver: saver),
@@ -123,7 +183,7 @@ void main() {
     expect(scan.right, lessThan(save.left));
   });
 
-  testWidgets('저장 시트에 네 가지 옵션이 있다', (tester) async {
+  testWidgets('저장 시트에 다섯 가지 옵션이 있다', (tester) async {
     await _scanTwoPages(tester);
     expect(find.text('저장 / 공유 (2쪽)'), findsOneWidget);
 
@@ -133,6 +193,7 @@ void main() {
     expect(find.text('사진첩에 저장 (JPG)'), findsOneWidget);
     expect(find.text('사진첩에 저장 (PNG)'), findsOneWidget);
     expect(find.text('PDF로 저장'), findsOneWidget);
+    expect(find.text('텍스트 추출'), findsOneWidget);
     expect(find.text('공유'), findsOneWidget);
   });
 
@@ -158,10 +219,111 @@ void main() {
     expect(find.text('PDF(2쪽)를 저장했습니다.'), findsNothing);
   });
 
-  testWidgets('공유를 고르면 공유 시트를 연다', (tester) async {
-    final saver = await _scanTwoPages(tester);
-    await _choose(tester, '공유');
-    expect(saver.calls, ['share:2']);
+  group('공유 형식 선택', () {
+    testWidgets('공유를 고르면 보낼 형식을 묻는다', (tester) async {
+      await _scanTwoPages(tester);
+      await _choose(tester, '공유');
+      expect(find.text('무엇을 보낼까요?'), findsOneWidget);
+      expect(find.text('PDF (모든 페이지)'), findsOneWidget);
+      expect(find.text('이미지 (JPG)'), findsOneWidget);
+      expect(find.text('추출한 텍스트'), findsOneWidget);
+    });
+
+    testWidgets('PDF를 고르면 PDF를 공유하고 iPad용 위치를 넘긴다', (tester) async {
+      final saver = await _scanTwoPages(tester);
+      await _choose(tester, '공유');
+      await tester.tap(find.text('PDF (모든 페이지)'));
+      await tester.pumpAndSettle();
+      expect(saver.calls, ['sharePdf:2']);
+      expect(saver.origins.single, isNotNull);
+      expect(saver.origins.single!.isEmpty, isFalse);
+    });
+
+    testWidgets('이미지를 고르면 JPG 이미지를 공유한다', (tester) async {
+      final saver = await _scanTwoPages(tester);
+      await _choose(tester, '공유');
+      await tester.tap(find.text('이미지 (JPG)'));
+      await tester.pumpAndSettle();
+      expect(saver.calls, ['shareImages:2']);
+    });
+
+    testWidgets('텍스트를 고르면 글자를 읽어 공유한다', (tester) async {
+      final saver = await _scanWithOcr(
+        tester,
+        FakeOcr({'/tmp/a.jpg': '안녕하세요', '/tmp/b.jpg': 'Hello'}),
+      );
+      await _choose(tester, '공유');
+      await tester.tap(find.text('추출한 텍스트'));
+      await tester.pumpAndSettle();
+      expect(saver.calls, ['shareText:[1쪽]\n안녕하세요\n\n[2쪽]\nHello']);
+    });
+
+    testWidgets('글자가 없으면 공유하지 않고 안내한다', (tester) async {
+      final saver = await _scanWithOcr(tester, FakeOcr({}));
+      await _choose(tester, '공유');
+      await tester.tap(find.text('추출한 텍스트'));
+      await tester.pumpAndSettle();
+      expect(saver.calls, isEmpty);
+      expect(find.text('텍스트를 찾지 못했습니다.'), findsOneWidget);
+    });
+  });
+
+  group('텍스트 추출', () {
+    testWidgets('추출한 글을 결과 화면에 보여 준다', (tester) async {
+      await _scanWithOcr(
+        tester,
+        FakeOcr({'/tmp/a.jpg': '첫 쪽 내용', '/tmp/b.jpg': '둘째 쪽 내용'}),
+      );
+      await _choose(tester, '텍스트 추출');
+
+      expect(find.byType(TextResultScreen), findsOneWidget);
+      expect(find.text('추출한 텍스트'), findsOneWidget);
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.controller!.text, '[1쪽]\n첫 쪽 내용\n\n[2쪽]\n둘째 쪽 내용');
+      expect(find.text('복사'), findsOneWidget);
+      expect(find.text('공유'), findsOneWidget);
+      expect(find.text('.txt로 저장'), findsOneWidget);
+    });
+
+    testWidgets('글자가 없으면 결과 화면 대신 안내를 띄운다', (tester) async {
+      await _scanWithOcr(tester, FakeOcr({'/tmp/a.jpg': '   '}));
+      await _choose(tester, '텍스트 추출');
+      expect(find.byType(TextResultScreen), findsNothing);
+      expect(find.text('텍스트를 찾지 못했습니다.'), findsOneWidget);
+    });
+
+    testWidgets('결과 화면에서 고친 글을 복사·공유·저장한다', (tester) async {
+      final saver = FakeSaver();
+      String? clip;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            clip = (call.arguments as Map)['text'] as String;
+          }
+          return null;
+        },
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TextResultScreen(text: '원문', saver: saver),
+        ),
+      );
+      await tester.enterText(find.byType(TextField), '고친 글');
+
+      await tester.tap(find.text('복사'));
+      await tester.pumpAndSettle();
+      expect(clip, '고친 글');
+      expect(find.text('텍스트를 복사했습니다.'), findsOneWidget);
+
+      await tester.tap(find.text('공유'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('.txt로 저장'));
+      await tester.pumpAndSettle();
+      expect(saver.calls, ['shareText:고친 글', 'saveText:고친 글']);
+      expect(saver.origins.single, isNotNull);
+      expect(find.text('텍스트 파일(.txt)을 저장했습니다.'), findsOneWidget);
+    });
   });
 
   testWidgets('저장에 실패하면 오류 안내가 뜬다', (tester) async {

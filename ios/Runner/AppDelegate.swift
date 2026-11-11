@@ -1,5 +1,6 @@
 import Flutter
 import UIKit
+import Vision
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
@@ -12,5 +13,62 @@ import UIKit
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "ScannerOcr") {
+      OcrChannel.register(messenger: registrar.messenger())
+    }
+  }
+}
+
+/// 문서 이미지에서 글자를 읽는다. Apple Vision(기기 안에서 처리, 무료)을 쓰며 한국어와 영어를 인식한다.
+enum OcrChannel {
+  static func register(messenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(name: "com.jinyu74.scanner/ocr", binaryMessenger: messenger)
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "recognize",
+            let args = call.arguments as? [String: Any],
+            let path = args["path"] as? String
+      else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          let text = try recognize(path: path)
+          DispatchQueue.main.async { result(text) }
+        } catch {
+          DispatchQueue.main.async {
+            result(FlutterError(code: "ocr_failed", message: error.localizedDescription, details: nil))
+          }
+        }
+      }
+    }
+  }
+
+  static func recognize(path: String) throws -> String {
+    guard let image = UIImage(contentsOfFile: path), let cgImage = image.cgImage else {
+      throw NSError(domain: "ocr", code: 1, userInfo: [NSLocalizedDescriptionKey: "이미지를 읽을 수 없습니다."])
+    }
+    let request = VNRecognizeTextRequest()
+    request.recognitionLevel = .accurate
+    request.usesLanguageCorrection = true
+    request.recognitionLanguages = ["ko-KR", "en-US"]
+    let handler = VNImageRequestHandler(cgImage: cgImage, orientation: cgOrientation(image.imageOrientation))
+    try handler.perform([request])
+    let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+    return lines.joined(separator: "\n")
+  }
+
+  private static func cgOrientation(_ o: UIImage.Orientation) -> CGImagePropertyOrientation {
+    switch o {
+    case .up: return .up
+    case .down: return .down
+    case .left: return .left
+    case .right: return .right
+    case .upMirrored: return .upMirrored
+    case .downMirrored: return .downMirrored
+    case .leftMirrored: return .leftMirrored
+    case .rightMirrored: return .rightMirrored
+    @unknown default: return .up
+    }
   }
 }

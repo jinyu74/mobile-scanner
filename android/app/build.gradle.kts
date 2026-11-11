@@ -47,3 +47,8 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // 텍스트 추출(OCR): ML Kit 한국어 인식 모델(기기 안에서 처리, 무료)
+    implementation("com.google.mlkit:text-recognition-korean:16.0.1")
+}
