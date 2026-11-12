@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/widgets.dart' show Rect;
 import 'package:gal/gal.dart';
 import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
@@ -20,8 +22,18 @@ abstract class SaveService {
   /// 모든 페이지를 A4 PDF 하나로 묶어 저장한다. 사용자가 취소하면 false.
   Future<bool> savePdf(List<String> paths, String fileName);
 
-  /// 시스템 공유 시트로 페이지 이미지를 공유한다.
-  Future<void> share(List<String> paths);
+  /// 추출한 글을 .txt 파일로 저장한다. 사용자가 취소하면 false.
+  Future<bool> saveText(String text, String fileName);
+
+  /// 모든 페이지를 A4 PDF 하나로 묶어 공유 시트로 보낸다.
+  /// [origin]은 iPad에서 공유 창이 가리킬 위치다.
+  Future<void> sharePdf(List<String> paths, String fileName, Rect? origin);
+
+  /// 페이지 이미지를 JPG로 공유한다.
+  Future<void> shareImages(List<String> paths, Rect? origin);
+
+  /// 글을 공유한다.
+  Future<void> shareText(String text, Rect? origin);
 }
 
 class DeviceSaveService implements SaveService {
@@ -67,10 +79,65 @@ class DeviceSaveService implements SaveService {
   }
 
   @override
-  Future<void> share(List<String> paths) async {
-    await SharePlus.instance.share(
-      ShareParams(files: [for (final p in paths) XFile(p)]),
+  Future<bool> saveText(String text, String fileName) async {
+    final uri = await FilePicker.saveFile(
+      fileName: fileName,
+      bytes: Uint8List.fromList(utf8.encode(text)),
+      mimeType: 'text/plain',
+      dialogTitle: '텍스트 저장 위치 선택',
     );
+    return uri != null;
+  }
+
+  @override
+  Future<void> sharePdf(
+    List<String> paths,
+    String fileName,
+    Rect? origin,
+  ) async {
+    final pages = [for (final p in paths) await File(p).readAsBytes()];
+    final pdf = await buildA4Pdf(pages);
+    final dir = await _shareDir();
+    final file = File('${dir.path}/$fileName');
+    await file.writeAsBytes(pdf);
+    await SharePlus.instance.share(
+      ShareParams(
+        files: [XFile(file.path, mimeType: 'application/pdf')],
+        sharePositionOrigin: origin,
+      ),
+    );
+  }
+
+  @override
+  Future<void> shareImages(List<String> paths, Rect? origin) async {
+    final dir = await _shareDir();
+    final files = <XFile>[];
+    for (var i = 0; i < paths.length; i++) {
+      final path = paths[i];
+      final bytes = await Isolate.run(
+        () => convertImage(File(path).readAsBytesSync(), ImageFormat.jpg),
+      );
+      final out = File('${dir.path}/스캔_${i + 1}쪽.jpg');
+      await out.writeAsBytes(bytes);
+      files.add(XFile(out.path, mimeType: 'image/jpeg'));
+    }
+    await SharePlus.instance.share(
+      ShareParams(files: files, sharePositionOrigin: origin),
+    );
+  }
+
+  @override
+  Future<void> shareText(String text, Rect? origin) async {
+    await SharePlus.instance.share(
+      ShareParams(text: text, sharePositionOrigin: origin),
+    );
+  }
+
+  /// 공유용 임시 폴더. 지난번 공유 파일은 지운다.
+  Future<Directory> _shareDir() async {
+    final dir = Directory('${(await getTemporaryDirectory()).path}/share');
+    if (await dir.exists()) await dir.delete(recursive: true);
+    return dir.create(recursive: true);
   }
 }
 
@@ -99,8 +166,13 @@ Uint8List convertImage(Uint8List bytes, ImageFormat format) {
 }
 
 /// 예: 스캔_20261111_1630.pdf
-String defaultPdfName(DateTime now) {
+String defaultPdfName(DateTime now) => '${_baseName(now)}.pdf';
+
+/// 예: 스캔_20261111_1630.txt
+String defaultTextName(DateTime now) => '${_baseName(now)}.txt';
+
+String _baseName(DateTime now) {
   String two(int n) => n.toString().padLeft(2, '0');
   return '스캔_${now.year}${two(now.month)}${two(now.day)}_'
-      '${two(now.hour)}${two(now.minute)}.pdf';
+      '${two(now.hour)}${two(now.minute)}';
 }

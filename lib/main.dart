@@ -4,7 +4,10 @@ import 'package:cunning_document_scanner/cunning_document_scanner.dart';
 import 'package:flutter/material.dart';
 
 import 'action_sheet.dart';
+import 'bottom_action_bar.dart';
+import 'ocr_service.dart';
 import 'save_service.dart';
+import 'text_result_screen.dart';
 
 /// 스캔을 실행하고 페이지 이미지 경로 목록을 돌려준다. 취소하면 null.
 typedef DocumentScanFn = Future<List<String>?> Function();
@@ -24,10 +27,12 @@ class ScannerApp extends StatelessWidget {
     super.key,
     this.scan = scanWithOsScanner,
     this.saver = const DeviceSaveService(),
+    this.ocr = const PlatformOcrService(),
   });
 
   final DocumentScanFn scan;
   final SaveService saver;
+  final OcrService ocr;
 
   @override
   Widget build(BuildContext context) {
@@ -37,16 +42,22 @@ class ScannerApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
       ),
-      home: HomeScreen(scan: scan, saver: saver),
+      home: HomeScreen(scan: scan, saver: saver, ocr: ocr),
     );
   }
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.scan, required this.saver});
+  const HomeScreen({
+    super.key,
+    required this.scan,
+    required this.saver,
+    required this.ocr,
+  });
 
   final DocumentScanFn scan;
   final SaveService saver;
+  final OcrService ocr;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -56,6 +67,15 @@ class _HomeScreenState extends State<HomeScreen> {
   final List<String> _pages = [];
   bool _scanning = false;
   bool _saving = false;
+
+  /// 저장 / 공유 버튼. iPad에서 공유 창이 이 버튼을 가리키게 한다.
+  final _actionKey = GlobalKey();
+
+  Rect? _shareOrigin() {
+    final box = _actionKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return null;
+    return box.localToGlobal(Offset.zero) & box.size;
+  }
 
   /// 선택 모드일 때 선택된 페이지 인덱스. null이면 선택 모드가 아니다.
   Set<int>? _selected;
@@ -129,10 +149,18 @@ class _HomeScreenState extends State<HomeScreen> {
       (_) => const SaveSheet(),
     );
     if (action == null || !mounted) return;
-    await _runSave(action);
+    ShareFormat? format;
+    if (action == SaveAction.share) {
+      format = await showActionSheet<ShareFormat>(
+        context,
+        (_) => const ShareFormatSheet(),
+      );
+      if (format == null || !mounted) return;
+    }
+    await _runSave(action, format);
   }
 
-  Future<void> _runSave(SaveAction action) async {
+  Future<void> _runSave(SaveAction action, [ShareFormat? format]) async {
     final pages = List<String>.of(_pages);
     setState(() => _saving = true);
     try {
@@ -152,13 +180,87 @@ class _HomeScreenState extends State<HomeScreen> {
             defaultPdfName(DateTime.now()),
           );
           if (mounted && saved) _toast('PDF(${pages.length}쪽)를 저장했습니다.');
+        case SaveAction.extractText:
+          final text = await _extractText(pages);
+          if (text == null || !mounted) return;
+          await Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => TextResultScreen(text: text, saver: widget.saver),
+            ),
+          );
         case SaveAction.share:
-          await widget.saver.share(pages);
+          final origin = _shareOrigin();
+          switch (format!) {
+            case ShareFormat.pdf:
+              await widget.saver.sharePdf(
+                pages,
+                defaultPdfName(DateTime.now()),
+                origin,
+              );
+            case ShareFormat.images:
+              await widget.saver.shareImages(pages, origin);
+            case ShareFormat.text:
+              final text = await _extractText(pages);
+              if (text == null) return;
+              await widget.saver.shareText(text, origin);
+          }
       }
     } catch (e) {
       if (mounted) _toast('저장에 실패했습니다: $e');
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// 모든 페이지에서 글자를 읽는다. 진행 상황 창을 띄우고,
+  /// 글자가 없으면 안내를 띄운 뒤 null을 돌려준다.
+  Future<String?> _extractText(List<String> pages) async {
+    final progress = ValueNotifier<int>(0);
+    final navigator = Navigator.of(context, rootNavigator: true);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          title: const Text('텍스트 추출 중'),
+          content: ValueListenableBuilder<int>(
+            valueListenable: progress,
+            builder: (_, done, _) => Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                LinearProgressIndicator(
+                  value: pages.isEmpty ? null : done / pages.length,
+                ),
+                const SizedBox(height: 12),
+                Text('$done / ${pages.length}쪽'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    try {
+      final text = await extractText(
+        pages,
+        widget.ocr,
+        onProgress: (done, _) => progress.value = done,
+      );
+      if (text.isEmpty) {
+        if (mounted) _toast('텍스트를 찾지 못했습니다.');
+        return null;
+      }
+      return text;
+    } on OcrException catch (e) {
+      if (mounted) _toast(e.message);
+      return null;
+    } on Exception catch (e) {
+      if (mounted) _toast('텍스트 추출에 실패했습니다: $e');
+      return null;
+    } finally {
+      navigator.pop();
+      progress.dispose();
     }
   }
 
@@ -205,6 +307,7 @@ class _HomeScreenState extends State<HomeScreen> {
       Expanded(
         flex: 3,
         child: FilledButton.icon(
+          key: _actionKey,
           onPressed: _saving || _scanning ? null : _openSaveSheet,
           icon: _saving ? _spinner : const Icon(Icons.save_alt),
           label: Text('저장 / 공유 (${_pages.length}쪽)'),
@@ -284,59 +387,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 onTap: _selecting ? () => _toggle(i) : null,
               ),
             ),
-      bottomNavigationBar: _BottomBar(
+      bottomNavigationBar: BottomActionBar(
         children: _selecting ? _selectionActions() : _mainActions(),
       ),
     );
   }
 }
 
-/// 화면 아래 고정 버튼 줄. 모든 버튼을 같은 높이(56)와 간격으로 맞춘다.
-class _BottomBar extends StatelessWidget {
-  const _BottomBar({required this.children});
+enum SaveAction { galleryJpg, galleryPng, pdf, extractText, share }
 
-  final List<Widget> children;
-
-  @override
-  Widget build(BuildContext context) {
-    final buttonStyle = ButtonStyle(
-      minimumSize: const WidgetStatePropertyAll(Size.fromHeight(56)),
-      shape: WidgetStatePropertyAll(
-        RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      ),
-      textStyle: const WidgetStatePropertyAll(
-        TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-      ),
-    );
-    final theme = Theme.of(context);
-    return Material(
-      color: theme.colorScheme.surfaceContainer,
-      child: SafeArea(
-        top: false,
-        minimum: const EdgeInsets.only(bottom: 12),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-          child: Theme(
-            data: theme.copyWith(
-              filledButtonTheme: FilledButtonThemeData(style: buttonStyle),
-              outlinedButtonTheme: OutlinedButtonThemeData(style: buttonStyle),
-            ),
-            child: Row(
-              children: [
-                for (var i = 0; i < children.length; i++) ...[
-                  if (i > 0) const SizedBox(width: 12),
-                  children[i],
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-enum SaveAction { galleryJpg, galleryPng, pdf, share }
+enum ShareFormat { pdf, images, text }
 
 class SaveSheet extends StatelessWidget {
   const SaveSheet({super.key});
@@ -365,9 +425,56 @@ class SaveSheet extends StatelessWidget {
           onTap: () => pick(SaveAction.pdf),
         ),
         ListTile(
+          leading: const Icon(Icons.text_snippet_outlined),
+          title: const Text('텍스트 추출'),
+          subtitle: const Text('문서의 글자를 읽어 복사·공유·저장합니다'),
+          onTap: () => pick(SaveAction.extractText),
+        ),
+        ListTile(
           leading: const Icon(Icons.ios_share),
           title: const Text('공유'),
+          subtitle: const Text('메일, 메시지, 카카오톡, 텔레그램 등으로 보냅니다'),
           onTap: () => pick(SaveAction.share),
+        ),
+      ],
+    );
+  }
+}
+
+/// 무엇을 보낼지 고르는 시트. 고른 뒤 시스템 공유 창이 열리고,
+/// 거기서 메일·메시지·카카오톡·텔레그램 등 설치된 앱을 고른다.
+class ShareFormatSheet extends StatelessWidget {
+  const ShareFormatSheet({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    void pick(ShareFormat f) => Navigator.of(context).pop(f);
+    return ActionSheetBody(
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(24, 0, 24, 8),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              '무엇을 보낼까요?',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ),
+        ListTile(
+          leading: const Icon(Icons.picture_as_pdf_outlined),
+          title: const Text('PDF (모든 페이지)'),
+          onTap: () => pick(ShareFormat.pdf),
+        ),
+        ListTile(
+          leading: const Icon(Icons.image_outlined),
+          title: const Text('이미지 (JPG)'),
+          onTap: () => pick(ShareFormat.images),
+        ),
+        ListTile(
+          leading: const Icon(Icons.text_snippet_outlined),
+          title: const Text('추출한 텍스트'),
+          onTap: () => pick(ShareFormat.text),
         ),
       ],
     );
