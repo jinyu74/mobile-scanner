@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:cunning_document_scanner/cunning_document_scanner.dart';
 import 'package:flutter/material.dart';
 
+import 'action_sheet.dart';
 import 'save_service.dart';
 
 /// 스캔을 실행하고 페이지 이미지 경로 목록을 돌려준다. 취소하면 null.
@@ -123,10 +124,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openSaveSheet() async {
-    final action = await showModalBottomSheet<SaveAction>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) => const SaveSheet(),
+    final action = await showActionSheet<SaveAction>(
+      context,
+      (_) => const SaveSheet(),
     );
     if (action == null || !mounted) return;
     await _runSave(action);
@@ -344,35 +344,32 @@ class SaveSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     void pick(SaveAction a) => Navigator.of(context).pop(a);
-    return SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            leading: const Icon(Icons.photo_library_outlined),
-            title: const Text('사진첩에 저장 (JPG)'),
-            subtitle: const Text('용량이 작아 일반적인 용도에 알맞습니다'),
-            onTap: () => pick(SaveAction.galleryJpg),
-          ),
-          ListTile(
-            leading: const Icon(Icons.image_outlined),
-            title: const Text('사진첩에 저장 (PNG)'),
-            subtitle: const Text('화질 손실 없이 저장합니다'),
-            onTap: () => pick(SaveAction.galleryPng),
-          ),
-          ListTile(
-            leading: const Icon(Icons.picture_as_pdf_outlined),
-            title: const Text('PDF로 저장'),
-            subtitle: const Text('모든 페이지를 A4 PDF 한 파일로 저장합니다'),
-            onTap: () => pick(SaveAction.pdf),
-          ),
-          ListTile(
-            leading: const Icon(Icons.ios_share),
-            title: const Text('공유'),
-            onTap: () => pick(SaveAction.share),
-          ),
-        ],
-      ),
+    return ActionSheetBody(
+      children: [
+        ListTile(
+          leading: const Icon(Icons.photo_library_outlined),
+          title: const Text('사진첩에 저장 (JPG)'),
+          subtitle: const Text('용량이 작아 일반적인 용도에 알맞습니다'),
+          onTap: () => pick(SaveAction.galleryJpg),
+        ),
+        ListTile(
+          leading: const Icon(Icons.image_outlined),
+          title: const Text('사진첩에 저장 (PNG)'),
+          subtitle: const Text('화질 손실 없이 저장합니다'),
+          onTap: () => pick(SaveAction.galleryPng),
+        ),
+        ListTile(
+          leading: const Icon(Icons.picture_as_pdf_outlined),
+          title: const Text('PDF로 저장'),
+          subtitle: const Text('모든 페이지를 A4 PDF 한 파일로 저장합니다'),
+          onTap: () => pick(SaveAction.pdf),
+        ),
+        ListTile(
+          leading: const Icon(Icons.ios_share),
+          title: const Text('공유'),
+          onTap: () => pick(SaveAction.share),
+        ),
+      ],
     );
   }
 }
