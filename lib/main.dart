@@ -252,6 +252,9 @@ class _HomeScreenState extends State<HomeScreen> {
         return null;
       }
       return text;
+    } on OcrException catch (e) {
+      if (mounted) _toast(e.message);
+      return null;
     } on Exception catch (e) {
       if (mounted) _toast('텍스트 추출에 실패했습니다: $e');
       return null;

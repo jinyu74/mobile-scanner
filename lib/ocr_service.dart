@@ -1,5 +1,18 @@
 import 'package:flutter/services.dart';
 
+/// 사용자에게 그대로 보여 줄 수 있는 텍스트 인식 오류.
+class OcrException implements Exception {
+  const OcrException(this.message);
+  final String message;
+
+  static const koreanUnsupported = OcrException(
+    '이 기기에서는 한국어 텍스트 인식을 지원하지 않습니다.',
+  );
+
+  @override
+  String toString() => message;
+}
+
 /// 이미지 한 장에서 글자를 읽는다.
 abstract class OcrService {
   Future<String> recognize(String imagePath);
@@ -13,10 +26,15 @@ class PlatformOcrService implements OcrService {
 
   @override
   Future<String> recognize(String imagePath) async {
-    final text = await _channel.invokeMethod<String>('recognize', {
-      'path': imagePath,
-    });
-    return text ?? '';
+    try {
+      final text = await _channel.invokeMethod<String>('recognize', {
+        'path': imagePath,
+      });
+      return text ?? '';
+    } on PlatformException catch (e) {
+      if (e.code == 'korean_unsupported') throw OcrException.koreanUnsupported;
+      rethrow;
+    }
   }
 }
 

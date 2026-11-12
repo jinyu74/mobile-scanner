@@ -56,6 +56,12 @@ class FakeSaver implements SaveService {
   }
 }
 
+class _UnsupportedOcr implements OcrService {
+  @override
+  Future<String> recognize(String imagePath) =>
+      Future.error(OcrException.koreanUnsupported);
+}
+
 /// 경로마다 정해 둔 글을 돌려주는 가짜 OCR.
 class FakeOcr implements OcrService {
   FakeOcr(this.texts);
@@ -65,7 +71,7 @@ class FakeOcr implements OcrService {
   Future<String> recognize(String imagePath) async => texts[imagePath] ?? '';
 }
 
-Future<FakeSaver> _scanWithOcr(WidgetTester tester, FakeOcr ocr) async {
+Future<FakeSaver> _scanWithOcr(WidgetTester tester, OcrService ocr) async {
   tester.view
     ..devicePixelRatio = 1
     ..physicalSize = const Size(800, 1600);
@@ -283,6 +289,13 @@ void main() {
       expect(find.text('복사'), findsOneWidget);
       expect(find.text('공유'), findsOneWidget);
       expect(find.text('.txt로 저장'), findsOneWidget);
+    });
+
+    testWidgets('한국어 인식을 지원하지 않는 기기면 그 안내만 띄운다', (tester) async {
+      await _scanWithOcr(tester, _UnsupportedOcr());
+      await _choose(tester, '텍스트 추출');
+      expect(find.byType(TextResultScreen), findsNothing);
+      expect(find.text('이 기기에서는 한국어 텍스트 인식을 지원하지 않습니다.'), findsOneWidget);
     });
 
     testWidgets('글자가 없으면 결과 화면 대신 안내를 띄운다', (tester) async {
