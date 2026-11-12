@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:cunning_document_scanner/cunning_document_scanner.dart';
 import 'package:flutter/material.dart';
 
+import 'action_sheet.dart';
 import 'bottom_action_bar.dart';
 import 'ocr_service.dart';
 import 'save_service.dart';
@@ -143,18 +144,16 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openSaveSheet() async {
-    final action = await showModalBottomSheet<SaveAction>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) => const SaveSheet(),
+    final action = await showActionSheet<SaveAction>(
+      context,
+      (_) => const SaveSheet(),
     );
     if (action == null || !mounted) return;
     ShareFormat? format;
     if (action == SaveAction.share) {
-      format = await showModalBottomSheet<ShareFormat>(
-        context: context,
-        showDragHandle: true,
-        builder: (_) => const ShareFormatSheet(),
+      format = await showActionSheet<ShareFormat>(
+        context,
+        (_) => const ShareFormatSheet(),
       );
       if (format == null || !mounted) return;
     }
@@ -402,42 +401,39 @@ class SaveSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     void pick(SaveAction a) => Navigator.of(context).pop(a);
-    return SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            leading: const Icon(Icons.photo_library_outlined),
-            title: const Text('사진첩에 저장 (JPG)'),
-            subtitle: const Text('용량이 작아 일반적인 용도에 알맞습니다'),
-            onTap: () => pick(SaveAction.galleryJpg),
-          ),
-          ListTile(
-            leading: const Icon(Icons.image_outlined),
-            title: const Text('사진첩에 저장 (PNG)'),
-            subtitle: const Text('화질 손실 없이 저장합니다'),
-            onTap: () => pick(SaveAction.galleryPng),
-          ),
-          ListTile(
-            leading: const Icon(Icons.picture_as_pdf_outlined),
-            title: const Text('PDF로 저장'),
-            subtitle: const Text('모든 페이지를 A4 PDF 한 파일로 저장합니다'),
-            onTap: () => pick(SaveAction.pdf),
-          ),
-          ListTile(
-            leading: const Icon(Icons.text_snippet_outlined),
-            title: const Text('텍스트 추출'),
-            subtitle: const Text('문서의 글자를 읽어 복사·공유·저장합니다'),
-            onTap: () => pick(SaveAction.extractText),
-          ),
-          ListTile(
-            leading: const Icon(Icons.ios_share),
-            title: const Text('공유'),
-            subtitle: const Text('메일, 메시지, 카카오톡, 텔레그램 등으로 보냅니다'),
-            onTap: () => pick(SaveAction.share),
-          ),
-        ],
-      ),
+    return ActionSheetBody(
+      children: [
+        ListTile(
+          leading: const Icon(Icons.photo_library_outlined),
+          title: const Text('사진첩에 저장 (JPG)'),
+          subtitle: const Text('용량이 작아 일반적인 용도에 알맞습니다'),
+          onTap: () => pick(SaveAction.galleryJpg),
+        ),
+        ListTile(
+          leading: const Icon(Icons.image_outlined),
+          title: const Text('사진첩에 저장 (PNG)'),
+          subtitle: const Text('화질 손실 없이 저장합니다'),
+          onTap: () => pick(SaveAction.galleryPng),
+        ),
+        ListTile(
+          leading: const Icon(Icons.picture_as_pdf_outlined),
+          title: const Text('PDF로 저장'),
+          subtitle: const Text('모든 페이지를 A4 PDF 한 파일로 저장합니다'),
+          onTap: () => pick(SaveAction.pdf),
+        ),
+        ListTile(
+          leading: const Icon(Icons.text_snippet_outlined),
+          title: const Text('텍스트 추출'),
+          subtitle: const Text('문서의 글자를 읽어 복사·공유·저장합니다'),
+          onTap: () => pick(SaveAction.extractText),
+        ),
+        ListTile(
+          leading: const Icon(Icons.ios_share),
+          title: const Text('공유'),
+          subtitle: const Text('메일, 메시지, 카카오톡, 텔레그램 등으로 보냅니다'),
+          onTap: () => pick(SaveAction.share),
+        ),
+      ],
     );
   }
 }
@@ -450,37 +446,34 @@ class ShareFormatSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     void pick(ShareFormat f) => Navigator.of(context).pop(f);
-    return SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(24, 0, 24, 8),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                '무엇을 보낼까요?',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-              ),
+    return ActionSheetBody(
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(24, 0, 24, 8),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              '무엇을 보낼까요?',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
             ),
           ),
-          ListTile(
-            leading: const Icon(Icons.picture_as_pdf_outlined),
-            title: const Text('PDF (모든 페이지)'),
-            onTap: () => pick(ShareFormat.pdf),
-          ),
-          ListTile(
-            leading: const Icon(Icons.image_outlined),
-            title: const Text('이미지 (JPG)'),
-            onTap: () => pick(ShareFormat.images),
-          ),
-          ListTile(
-            leading: const Icon(Icons.text_snippet_outlined),
-            title: const Text('추출한 텍스트'),
-            onTap: () => pick(ShareFormat.text),
-          ),
-        ],
-      ),
+        ),
+        ListTile(
+          leading: const Icon(Icons.picture_as_pdf_outlined),
+          title: const Text('PDF (모든 페이지)'),
+          onTap: () => pick(ShareFormat.pdf),
+        ),
+        ListTile(
+          leading: const Icon(Icons.image_outlined),
+          title: const Text('이미지 (JPG)'),
+          onTap: () => pick(ShareFormat.images),
+        ),
+        ListTile(
+          leading: const Icon(Icons.text_snippet_outlined),
+          title: const Text('추출한 텍스트'),
+          onTap: () => pick(ShareFormat.text),
+        ),
+      ],
     );
   }
 }
